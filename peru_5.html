@@ -1,0 +1,176 @@
+<!-- python3 -m http.server 8000  -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Guides</title>
+<meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.js"></script>
+<!-- Geocoder CSS -->
+<link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v4.7.2/mapbox-gl-geocoder.css" rel="stylesheet" />
+<!-- Geocoder JS -->
+<script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v4.7.2/mapbox-gl-geocoder.min.js"></script>
+<style>
+    body { margin: 0; padding: 0; }
+    #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+    /* Asegurar que el buscador esté en la parte superior */
+    .mapboxgl-ctrl-geocoder {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        width: 50%;
+        z-index: 1;
+    }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+    mapboxgl.accessToken = 'pk.eyJ1IjoibGlicmVrY2VzYXIiLCJhIjoiY2xqOHJ3NGpvMDVsazNqcGVqczEyNXJuNyJ9.2rH00oLq_qTV9Wwa33GekQ';
+    
+    // Crear el mapa
+    const map = new mapboxgl.Map({
+        container: 'map',
+        style: 'mapbox://styles/mapbox/streets-v12', // satellite-v9',  // Cambiar a un estilo que incluya el globo
+        projection: 'globe',  // Asegurarse de que se usa la proyección en globo
+        zoom: 1,
+        center: [30, 15]
+    });
+
+    // Añadir el control de navegación y mantener habilitado el zoom de scroll
+    map.addControl(new mapboxgl.NavigationControl());
+
+    // Geocoder (buscador de direcciones)
+    const geocoder = new MapboxGeocoder({
+        accessToken: mapboxgl.accessToken,
+        mapboxgl: mapboxgl
+    });
+    map.addControl(geocoder, 'top-left');
+
+    // Configuración de rotación del globo
+    const secondsPerRevolution = 240;
+    const maxSpinZoom = 5;
+    const slowSpinZoom = 3;
+    let userInteracting = false;
+    const spinEnabled = true;
+
+    function spinGlobe() {
+        const zoom = map.getZoom();
+        if (spinEnabled && !userInteracting && zoom < maxSpinZoom) {
+            let distancePerSecond = 360 / secondsPerRevolution;
+            if (zoom > slowSpinZoom) {
+                const zoomDif = (maxSpinZoom - zoom) / (maxSpinZoom - slowSpinZoom);
+                distancePerSecond *= zoomDif;
+            }
+            const center = map.getCenter();
+            center.lng -= distancePerSecond;
+            map.easeTo({ center, duration: 1000, easing: (n) => n });
+        }
+    }
+
+    map.on('mousedown', () => { userInteracting = true; });
+    map.on('dragstart', () => { userInteracting = true; });
+    map.on('moveend', () => { spinGlobe(); });
+    spinGlobe();
+
+    // Cargar y agregar el GeoJSON con colores aleatorios
+    map.on('load', () => {
+        map.setFog({}); // Restaurar el fondo estrellado y la atmósfera
+
+        // Agregar la fuente GeoJSON
+        map.addSource('geojson-data', {
+            'type': 'geojson',
+            'data': './MX1_zipcodes_v75.geojson' // Ruta al archivo GeoJSON
+        });
+
+        // Función para generar colores aleatorios
+        function getRandomColor() {
+            const letters = '0123456789ABCDEF';
+            let color = '#';
+            for (let i = 0; i < 6; i++) {
+                color += letters[Math.floor(Math.random() * 16)];
+            }
+            return color;
+        }
+
+        // Objeto para almacenar colores generados por nombre
+        const colorMap = {};
+
+        // Leer el GeoJSON y asignar colores aleatorios
+        fetch('./MX1_zipcodes_v75.geojson')
+            .then(response => response.json())
+            .then(data => {
+                // Asignar colores a los nombres únicos
+                data.features.forEach(feature => {
+                    const name = feature.properties.name;
+                    if (!colorMap[name]) {
+                        colorMap[name] = getRandomColor();
+                    }
+                });
+
+                // Agregar la capa con colores aleatorios
+                map.addLayer({
+                    'id': 'geojson-layer',
+                    'type': 'fill',
+                    'source': 'geojson-data',
+                    'paint': {
+                        'fill-color': [
+                            'match',
+                            ['get', 'name'],
+                            ...Object.entries(colorMap).flat(),
+                            '#888888' // Color por defecto
+                        ],
+                        'fill-opacity': 0.3
+                    }
+                });
+
+                // Agregar el borde a los polígonos
+                map.addLayer({
+                    'id': 'outline',
+                    'type': 'line',
+                    'source': 'geojson-data',
+                    'layout': {},
+                    'paint': {
+                        'line-color': '#000',
+                        'line-width': 1
+                    }
+                });
+            });
+
+        // Agregar un popup al hacer clic en un polígono
+        map.on('click', 'geojson-layer', (e) => {
+            const properties = e.features[0].properties;
+
+            // Mostrar solo las propiedades 'name', 'commune' y 'station'
+            const content = `
+                <strong>name:</strong> ${properties.name}<br>
+                <strong>commune:</strong> ${properties.commune}<br>
+                <strong>station:</strong> ${properties.station}
+            `;
+
+            new mapboxgl.Popup()
+                .setLngLat(e.lngLat)
+                .setHTML(content)
+                .addTo(map);
+        });
+
+        // Cambiar el cursor a "pointer" cuando está sobre un polígono
+        map.on('mouseenter', 'geojson-layer', () => {
+            map.getCanvas().style.cursor = 'pointer';
+        });
+
+        // Restaurar el cursor cuando sale del polígono
+        map.on('mouseleave', 'geojson-layer', () => {
+            map.getCanvas().style.cursor = '';
+        });
+    });
+
+    // Manejo de errores
+    map.on('error', function(e) {
+        console.error('Error al cargar el GeoJSON o el mapa:', e);
+    });
+</script>
+
+</body>
+</html>
